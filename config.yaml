@@ -1,0 +1,58 @@
+# =============================================================================
+# Semester Project - Vehicle Detection Model Optimization for Raspberry Pi 5
+# One config for every script. All paths are relative to this folder.
+# =============================================================================
+
+dataset:
+  # Used by TRAINING-based steps (prune / NAS) only - quantize ignores it.
+  # COCO-remapped VisDrone road data so the COCO-pretrained model recovers
+  # pruning on REAL traffic while keeping car=2/motorcycle=3/bus=5/truck=7.
+  data_yaml: "dataset/vehicles_coco/data.yaml"
+  # Images used for static INT8 calibration (download.py fills this folder).
+  calibration_dir: "dataset/calibration"
+
+train:                     # used by 01_simple_model.py (and finetunes elsewhere)
+  epochs: 5                # CPU-friendly default; raise to 30+ on a GPU
+  imgsz: 320               # 320 trains ~4x faster than 640 on CPU
+  batch: 8
+
+prune:                     # used by 02_pruned_model.py
+  amount: 0.05             # LIGHT prune (5%) - minimal damage, stays close to simple
+  iterative_steps: 2       # prune -> finetune -> prune -> finetune
+  finetune_epochs_per_step: 1   # minimal recovery (little to fix at 5%); fewer epochs
+  final_finetune_epochs: 2      # also limit drift from the working COCO baseline (~4 total)
+
+quant:                     # used by 03 / 04
+  calibration_images: 100  # how many images feed static INT8 calibration
+
+nas:                       # used by 05_hardware_nas.py
+  depth_multipliers: [0.33, 0.67]
+  width_multipliers: [0.25, 0.50, 0.75]
+  search_epochs: 3         # quick training per candidate (ranking, not final quality)
+  final_epochs: 10         # full training for the winning architecture
+  latency_budget_ms: 100   # hard constraint: estimated latency ON THE PI must beat this
+  pi_scale_factor: 3.5     # Pi 5 CPU is roughly this much slower than a laptop CPU
+
+benchmark:                 # used by 06_benchmark.py
+  runs: 30
+  threads: 4               # match the Pi 5's 4 cores for honest numbers
+
+detect:                    # used by detect.py
+  # Default = a bundled demo traffic video, so detection runs on the Pi with no
+  # camera / LAN / ONVIF. Swap to any clip in dataset/demo/ (or "0" for webcam).
+  source: "dataset/demo/highway-busy.mp4"
+  conf_threshold: 0.35
+  iou_threshold: 0.45
+  max_fps: 15               # fixed rate so every model is tested at the SAME FPS
+                            # (the differentiator then becomes CPU usage to hold it)
+  # COCO class IDs - the pretrained YOLOv8n (and its quantized variants) use these.
+  vehicle_class_ids: [2, 3, 5, 7]
+  class_names:
+    2: "car"
+    3: "motorcycle"
+    5: "bus"
+    7: "truck"
+  congestion:
+    free_below: 0.5        # vehicles per 100k pixels -> below this = FREE
+    moderate_below: 1.5    # below this = MODERATE, above = HEAVY
+    smoothing_frames: 15   # rolling average so the label doesn't flicker

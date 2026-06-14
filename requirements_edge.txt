@@ -1,0 +1,10 @@
+# Minimal inference-only requirements for the Raspberry Pi 5.
+# Install with: bash install.sh --edge
+onnxruntime>=1.17.0
+opencv-python>=4.9   # NOTE: on Raspberry Pi pip pulls a HEADLESS build (no cv2.imshow window).
+                     # To see the live video on a Pi:  sudo apt install python3-opencv
+                     # then enable system-site-packages in the venv (see "Seeing the window on a Pi" below).
+numpy>=1.24,<2       # <2 keeps ABI-compatibility with Debian's system OpenCV on the Pi
+pyyaml>=6.0
+psutil>=5.9        # live CPU/RAM readout on the detection overlay
+matplotlib>=3.6    # benchmark comparison chart (06_benchmark.py -> comparison.png)

@@ -24,19 +24,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from common import MODELS_DIR, image_to_blob, letterbox, load_config, onnx_input_size
+from common import (MODELS_DIR, fit_window_to_screen, image_to_blob, letterbox,
+                    load_config, onnx_input_size)
 
-# Optional system-resource readout (CPU/RAM). Degrades gracefully if absent.
+# Optional system-resource readout (CPU/RAM, Task-Manager style). Degrades if absent.
 try:
     import psutil
-    _PROC = psutil.Process()
-    psutil.cpu_percent(None)   # prime the system-wide counter
-    _PROC.cpu_percent(None)    # prime the per-process counter
-    _CORES = psutil.cpu_count() or 1
+    psutil.cpu_percent(None)   # prime the system-wide counter (first call returns 0.0)
 except Exception:  # noqa: BLE001
     psutil = None
-    _PROC = None
-    _CORES = 1
 
 VARIANTS = {
     "simple": ["simple.onnx"],
@@ -149,11 +145,14 @@ def main() -> None:
 
     times: deque[float] = deque(maxlen=30)
     n, t_last = 0, 0.0
-    res_last, cpu_pct, proc_pct, ram_mb = 0.0, 0.0, 0.0, 0.0
+    res_last, cpu_pct, ram_used, ram_total, ram_pct = 0.0, 0.0, 0.0, 0.0, 0.0
     max_fps = float(cfg.get("max_fps", 60) or 0)     # cap processing rate (0 = uncapped)
     min_dt = (1.0 / max_fps) if max_fps > 0 else 0.0
     prev_period = min_dt or 0.02
     can_show = not args.no_display   # may flip to False if OpenCV has no GUI backend
+    if can_show and not fit_window_to_screen("vehicle detection (q to quit)"):
+        can_show = False
+        print("[detect] OpenCV has no GUI backend - running headless (no window).")
     try:
         while True:
             loop_start = time.perf_counter()
@@ -186,14 +185,16 @@ def main() -> None:
             type_counts = Counter(class_names.get(int(c), str(int(c))) for c in class_ids)
             types_str = "  ".join(f"{k}: {v}" for k, v in sorted(type_counts.items()))
 
-            # Sample processing load at most twice a second (cheap + steady).
+            # Whole-machine usage, like Task Manager (CPU% + RAM used/total).
+            # Sampled at most twice a second (cheap + steady).
             if psutil is not None and time.time() - res_last >= 0.5:
                 res_last = time.time()
-                cpu_pct = psutil.cpu_percent(None)              # whole machine, 0-100%
-                proc_pct = _PROC.cpu_percent(None) / _CORES      # this process, 0-100%
-                ram_mb = _PROC.memory_info().rss / 1e6
-            res_str = (f"CPU {cpu_pct:.0f}% (proc {proc_pct:.0f}%)  RAM {ram_mb:.0f}MB  "
-                       f"{infer_ms:.0f}ms" if psutil is not None else f"{infer_ms:.0f}ms/frame")
+                cpu_pct = psutil.cpu_percent(None)               # whole machine, 0-100%
+                vm = psutil.virtual_memory()
+                ram_used, ram_total, ram_pct = vm.used / 1e9, vm.total / 1e9, vm.percent
+            res_str = (f"CPU {cpu_pct:.0f}%   RAM {ram_used:.1f}/{ram_total:.1f} GB "
+                       f"({ram_pct:.0f}%)   {infer_ms:.0f} ms"
+                       if psutil is not None else f"{infer_ms:.0f} ms/frame")
 
             n += 1
             if time.time() - t_last >= 1.0:

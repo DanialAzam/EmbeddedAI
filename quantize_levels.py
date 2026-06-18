@@ -63,10 +63,12 @@ def calib_images(cfg) -> list[Path]:
 
 
 def build_int8(src: Path, dst: Path, cfg, imgsz: int, exclude: list[str]) -> None:
-    """Static INT8 (U8S8 scheme, per-channel). `exclude` keeps named nodes FP32."""
+    """Static INT8 (U8S8 scheme, per-channel). `exclude` keeps named nodes FP32.
+    Calibration method from config.quant.calibration_method (Entropy clips
+    activation outliers for better int8 scales), with a MinMax fallback."""
     import onnxruntime as ort
     from onnxruntime.quantization import (
-        QuantFormat, QuantType, quantize_static,
+        CalibrationMethod, QuantFormat, QuantType, quantize_static,
     )
     from onnxruntime.quantization.shape_inference import quant_pre_process
 
@@ -79,20 +81,39 @@ def build_int8(src: Path, dst: Path, cfg, imgsz: int, exclude: list[str]) -> Non
         model_for_quant = src
 
     sess = ort.InferenceSession(str(model_for_quant), providers=["CPUExecutionProvider"])
-    reader = _CalibReader(calib_images(cfg), sess.get_inputs()[0].name, imgsz)
+    input_name = sess.get_inputs()[0].name
+    imgs = calib_images(cfg)
 
-    quantize_static(
-        model_input=str(model_for_quant),
-        model_output=str(dst),
-        calibration_data_reader=reader,
-        quant_format=QuantFormat.QDQ,
-        activation_type=QuantType.QUInt8,   # U8 activations -> fast ARM/CPU path
-        weight_type=QuantType.QInt8,        # S8 weights  (U8S8 scheme)
-        per_channel=True,
-        nodes_to_exclude=exclude or None,
-    )
+    table = {"entropy": CalibrationMethod.Entropy, "percentile": CalibrationMethod.Percentile,
+             "minmax": CalibrationMethod.MinMax}
+    primary = table.get(str(cfg.get("quant", {}).get("calibration_method", "entropy")).lower(),
+                        CalibrationMethod.Entropy)
+    order = [primary] + ([CalibrationMethod.MinMax] if primary != CalibrationMethod.MinMax else [])
+
+    last_err: Exception | None = None
+    for method in order:
+        try:
+            quantize_static(
+                model_input=str(model_for_quant),
+                model_output=str(dst),
+                calibration_data_reader=_CalibReader(imgs, input_name, imgsz),
+                quant_format=QuantFormat.QDQ,
+                activation_type=QuantType.QUInt8,   # U8 activations -> fast ARM/CPU path
+                weight_type=QuantType.QInt8,        # S8 weights  (U8S8 scheme)
+                per_channel=True,
+                nodes_to_exclude=exclude or None,
+                calibrate_method=method,
+            )
+            print(f"   (calibration: {method.name} on {len(imgs)} images)")
+            if model_for_quant != src:
+                model_for_quant.unlink(missing_ok=True)
+            return
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            print(f"   ({method.name} calibration failed: {str(e)[:70]})")
     if model_for_quant != src:
         model_for_quant.unlink(missing_ok=True)
+    raise last_err if last_err else RuntimeError("quantize_static produced no model")
 
 
 def build_fp16(src: Path, dst: Path) -> None:
@@ -108,6 +129,27 @@ def build_fp16(src: Path, dst: Path) -> None:
     om.save_model_to_file(str(dst))
     # Validate it actually loads before we depend on it.
     ort.InferenceSession(str(dst), providers=["CPUExecutionProvider"])
+
+
+def build_fp16_head(selective: Path, dst: Path) -> None:
+    """Mixed precision: take the selective-INT8 model (int8 body, FP32 head) and
+    convert ONLY the detection head to FP16. Smaller than the FP32-head model,
+    ~same accuracy (FP16 has ample range for the head). On the Pi this is a size
+    win, not a speed one (ORT's CPU casts FP16->FP32)."""
+    import onnxruntime as ort
+    from onnxruntime.transformers.onnx_model import OnnxModel
+
+    model = onnx.load(str(selective))
+    head = set(head_nodes_to_exclude(selective))           # head node names (still FP32)
+    if not head:
+        raise RuntimeError("no detection-head nodes found to convert")
+    body_block = [n.name for n in model.graph.node if n.name and n.name not in head]
+    om = OnnxModel(model)
+    # convert everything NOT in the block list -> only the head becomes FP16,
+    # with Cast nodes auto-inserted at the int8/FP16 boundary.
+    om.convert_float_to_float16(keep_io_types=True, node_block_list=body_block)
+    om.save_model_to_file(str(dst))
+    ort.InferenceSession(str(dst), providers=["CPUExecutionProvider"])  # validate
 
 
 def detect_avg_vehicles(onnx_path: Path, video: Path, cfg, frames: int = 120) -> float:
@@ -154,6 +196,7 @@ def run(onnx_path: str | Path = MODELS_DIR / "simple.onnx",
 
     full = MODELS_DIR / f"{prefix}_int8_full.onnx"
     selective = MODELS_DIR / f"{prefix}_static.onnx"
+    fp16head = MODELS_DIR / f"{prefix}_static_fp16head.onnx"
     fp16 = MODELS_DIR / f"{prefix}_fp16.onnx"
 
     head = head_nodes_to_exclude(src)
@@ -162,7 +205,7 @@ def run(onnx_path: str | Path = MODELS_DIR / "simple.onnx",
 
     built: list[tuple[str, Path]] = [("FP32 baseline", src)]
 
-    print("\n[levels] 1/3 INT8 full (aggressive, every layer)...")
+    print("\n[levels] 1/4 INT8 full (aggressive, every layer)...")
     try:
         build_int8(src, full, cfg, imgsz, exclude=[])
         built.append(("INT8 full (aggressive)", full))
@@ -170,7 +213,7 @@ def run(onnx_path: str | Path = MODELS_DIR / "simple.onnx",
     except Exception as e:  # noqa: BLE001
         print(f"         FAILED: {e}")
 
-    print("[levels] 2/3 INT8 selective (head kept FP32)...")
+    print("[levels] 2/4 INT8 selective (head kept FP32)...")
     try:
         build_int8(src, selective, cfg, imgsz, exclude=head)
         built.append(("INT8 selective (head FP32)", selective))
@@ -178,7 +221,17 @@ def run(onnx_path: str | Path = MODELS_DIR / "simple.onnx",
     except Exception as e:  # noqa: BLE001
         print(f"         FAILED: {e}")
 
-    print("[levels] 3/3 FP16 half precision...")
+    print("[levels] 3/4 INT8 body + FP16 head (mixed precision)...")
+    try:
+        if not selective.exists():
+            raise RuntimeError("needs the selective INT8 model (step 2 failed)")
+        build_fp16_head(selective, fp16head)
+        built.append(("INT8 body + FP16 head", fp16head))
+        print(f"         -> {fp16head.name}")
+    except Exception as e:  # noqa: BLE001
+        print(f"         FAILED: {e}")
+
+    print("[levels] 4/4 FP16 half precision...")
     try:
         build_fp16(src, fp16)
         built.append(("FP16 half", fp16))

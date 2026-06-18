@@ -16,14 +16,14 @@ train:                     # used by 01_simple_model.py (and finetunes elsewhere
   imgsz: 320               # 320 trains ~4x faster than 640 on CPU
   batch: 8
 
-prune:                     # used by 02_pruned_model.py
-  amount: 0.05             # LIGHT prune (5%) - minimal damage, stays close to simple
-  iterative_steps: 2       # prune -> finetune -> prune -> finetune
-  finetune_epochs_per_step: 1   # minimal recovery (little to fix at 5%); fewer epochs
-  final_finetune_epochs: 2      # also limit drift from the working COCO baseline (~4 total)
+prune:                     # used by 02_pruned_model.py - ITERATIVE pruning
+  amount: 0.10             # TOTAL fraction of channels to prune (0.10 = 10%)
+  step: 0.01               # step size per round (0.01 = 1%); rounds = round(amount / step)
+  finetune_epochs: 1       # fine-tune epochs after EACH prune step (recovery)
 
-quant:                     # used by 03 / 04
-  calibration_images: 100  # how many images feed static INT8 calibration
+quant:                     # used by 03_quantized_model.py / quantize_levels.py
+  calibration_images: 128  # how many calibration images feed static INT8
+  calibration_method: entropy   # entropy | percentile | minmax  (entropy clips outliers)
 
 nas:                       # used by 05_hardware_nas.py
   depth_multipliers: [0.33, 0.67]
@@ -36,6 +36,7 @@ nas:                       # used by 05_hardware_nas.py
 benchmark:                 # used by 06_benchmark.py
   runs: 30
   threads: 4               # match the Pi 5's 4 cores for honest numbers
+  device: ""               # name shown in results; blank = auto-detect (ARM -> "Raspberry Pi 5")
 
 detect:                    # used by detect.py
   # Default = a bundled demo traffic video, so detection runs on the Pi with no

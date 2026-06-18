@@ -33,11 +33,34 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
+try:  # live system monitor (Task-Manager-style CPU/RAM in the status bar)
+    import psutil
+    psutil.cpu_percent(None)   # prime the counter (first call returns 0.0)
+except Exception:  # noqa: BLE001
+    psutil = None
+
 BASE = Path(__file__).resolve().parent
 IS_WINDOWS = os.name == "nt"
 VENV_PY = BASE / (".venv/Scripts/python.exe" if IS_WINDOWS else ".venv/bin/python")
 MODELS = BASE / "models"
 RESULTS = BASE / "results"
+
+# ---- "Indigo Slate" theme -------------------------------------------------
+# One cool-slate neutral ramp + a single indigo accent. Per-platform fonts so
+# the Pi (Raspberry Pi OS) uses DejaVu Sans instead of falling back to an ugly
+# default - "Segoe UI" does not exist on Linux.
+UI = "Segoe UI" if IS_WINDOWS else ("Helvetica Neue" if sys.platform == "darwin"
+                                    else "DejaVu Sans")
+MONO = "Consolas" if IS_WINDOWS else "DejaVu Sans Mono"
+BG, SURF, ALT, BORDER = "#eef1f7", "#ffffff", "#dde3ee", "#c2ccdb"   # neutrals
+INK, MUTED = "#11203a", "#54637a"                                    # text
+ACC, ACC_H, ACC_P, ON_ACC = "#4f46e5", "#4338ca", "#3730a3", "#ffffff"  # indigo
+SUCCESS, WARN, ERROR = "#15803d", "#b45309", "#b42318"               # status trio
+DIS_BG, DIS_FG = "#ccd3e0", "#8a96a8"                                # disabled
+HOVER_FILL, SB_THUMB, SB_THUMB_H = "#d3dae7", "#c2ccdb", "#a9b4c9"   # hover/scrollbar
+HDR_FROM, HDR_TO, HDR_TITLE, HDR_SUB = "#11173a", "#4f46e5", "#ffffff", "#e0e7ff"
+CON_BG, CON_FG, CON_SEL = "#0f141c", "#e6eaf2", "#27324a"            # log console
+CON_HDR, CON_OK, CON_ERR, CON_WARN = "#7db4ff", "#56d364", "#ff7b72", "#e3b341"
 
 
 def _is_edge_device() -> bool:
@@ -95,18 +118,135 @@ def open_path(p: Path) -> None:
         messagebox.showerror("Open failed", f"{p}\n\n{e}")
 
 
+def _hex(h: str):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _paint_gradient(canvas, c1: str, c2: str, steps: int = 96) -> None:
+    """Fill a tk.Canvas with a horizontal c1 -> c2 gradient drawn as vertical bands."""
+    canvas.delete("grad")
+    w = max(canvas.winfo_width(), 1)
+    h = max(canvas.winfo_height(), 1)
+    (r1, g1, b1), (r2, g2, b2) = _hex(c1), _hex(c2)
+    bw = w / steps
+    for i in range(steps):
+        t = i / (steps - 1) if steps > 1 else 0.0
+        col = f"#{int(r1+(r2-r1)*t):02x}{int(g1+(g2-g1)*t):02x}{int(b1+(b2-b1)*t):02x}"
+        canvas.create_rectangle(int(i * bw), 0, int((i + 1) * bw) + 1, h,
+                                outline="", fill=col, tags="grad")
+    canvas.tag_lower("grad")
+
+
 class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        root.title("Semester Project - Control Panel")
-        root.geometry("1200x720")
-        root.minsize(1000, 600)
+        root.title("Vehicle Detection - Edge Optimization Control Panel")
+        root.geometry("1280x800")
+        root.minsize(1040, 640)
 
+        # ---- "Indigo Slate" theme: one slate ramp + a single indigo accent ----
+        # clam is the only fully-colourable theme on every OS. There are no shadows
+        # or rounded corners in clam, so depth is faked with 1px hairline borders;
+        # the fake 3-D bevel is killed by pinning lightcolor/darkcolor to the border.
+        root.configure(bg=BG)
         style = ttk.Style()
         try:
-            style.theme_use("vista" if IS_WINDOWS else "clam")
+            style.theme_use("clam")
         except tk.TclError:
             pass
+        FB, FS, FBOLD = (UI, 10), (UI, 9), (UI, 10, "bold")
+
+        style.configure(".", background=BG, foreground=INK, font=FB, bordercolor=BORDER,
+                        lightcolor=BG, darkcolor=BORDER, focuscolor=ACC, troughcolor=ALT)
+        style.configure("TFrame", background=BG)
+        style.configure("TLabel", background=BG, foreground=INK)
+        style.configure("Hint.TLabel", background=BG, foreground=MUTED, font=FS)
+        style.configure("TSeparator", background=BORDER)
+
+        style.configure("TLabelframe", background=BG, bordercolor=BORDER, borderwidth=1,
+                        relief="solid", lightcolor=BG, darkcolor=BORDER)
+        style.configure("TLabelframe.Label", background=BG, foreground=ACC, font=FBOLD)
+
+        # secondary (default) button = outlined slate; primary = solid indigo
+        style.configure("TButton", padding=(10, 6), font=(UI, 9, "bold"), background=ALT,
+                        foreground=INK, bordercolor=BORDER, lightcolor=BORDER,
+                        darkcolor=BORDER, borderwidth=1, relief="solid")
+        style.map("TButton",
+                  background=[("pressed", BORDER), ("active", HOVER_FILL), ("disabled", DIS_BG)],
+                  foreground=[("disabled", DIS_FG)], bordercolor=[("active", MUTED)],
+                  lightcolor=[("active", MUTED)], darkcolor=[("active", MUTED)])
+        style.configure("Accent.TButton", padding=(10, 6), font=(UI, 9, "bold"),
+                        background=ACC, foreground=ON_ACC, bordercolor=ACC,
+                        lightcolor=ACC, darkcolor=ACC, borderwidth=1, relief="flat")
+        style.map("Accent.TButton",
+                  background=[("pressed", ACC_P), ("active", ACC_H), ("disabled", DIS_BG)],
+                  foreground=[("disabled", DIS_FG)],
+                  bordercolor=[("pressed", ACC_P), ("active", ACC_H), ("disabled", DIS_BG)],
+                  lightcolor=[("pressed", ACC_P), ("active", ACC_H)],
+                  darkcolor=[("pressed", ACC_P), ("active", ACC_H)])
+
+        style.configure("TCheckbutton", background=BG, foreground=INK, focuscolor=BG,
+                        indicatorbackground=SURF, indicatorforeground=INK,
+                        upperbordercolor=BORDER, lowerbordercolor=BORDER)
+        style.map("TCheckbutton", background=[("active", BG)],
+                  indicatorbackground=[("selected", ACC), ("active", HOVER_FILL)],
+                  indicatorforeground=[("selected", ON_ACC)],
+                  upperbordercolor=[("selected", ACC)], lowerbordercolor=[("selected", ACC)])
+
+        style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(2, 4, 2, 0))
+        style.configure("TNotebook.Tab", padding=(14, 7), font=(UI, 9, "bold"),
+                        background=ALT, foreground=MUTED, bordercolor=BORDER, borderwidth=1)
+        style.map("TNotebook.Tab",
+                  background=[("selected", SURF), ("active", HOVER_FILL)],
+                  foreground=[("selected", ACC)], lightcolor=[("selected", ACC)])
+
+        style.configure("Treeview", rowheight=26, font=FB, background=SURF,
+                        fieldbackground=SURF, foreground=INK, bordercolor=BORDER,
+                        lightcolor=BORDER, darkcolor=BORDER)
+        style.map("Treeview", background=[("selected", ACC)], foreground=[("selected", ON_ACC)])
+        style.configure("Treeview.Heading", background=ALT, foreground=INK,
+                        font=(UI, 9, "bold"), relief="raised", bordercolor=BORDER,
+                        borderwidth=1, lightcolor=BORDER, darkcolor=BORDER)
+        style.map("Treeview.Heading", background=[("active", HOVER_FILL)])
+
+        # white fields with an indigo focus ring (entry / spinbox / combobox)
+        for _cls in ("TEntry", "TSpinbox", "TCombobox"):
+            style.configure(_cls, fieldbackground=SURF, background=SURF, foreground=INK,
+                            bordercolor=BORDER, lightcolor=BORDER, darkcolor=BORDER,
+                            arrowcolor=MUTED, arrowsize=14, padding=4)
+            style.map(_cls,
+                      bordercolor=[("focus", ACC)], lightcolor=[("focus", ACC)],
+                      darkcolor=[("focus", ACC)],
+                      fieldbackground=[("disabled", ALT), ("readonly", SURF)],
+                      foreground=[("disabled", DIS_FG), ("readonly", INK)],
+                      background=[("readonly", SURF)],
+                      arrowcolor=[("pressed", ACC), ("disabled", DIS_FG)])
+        # combobox popup is a classic tk.Listbox - only reachable via option_add
+        root.option_add("*TCombobox*Listbox.background", SURF)
+        root.option_add("*TCombobox*Listbox.foreground", INK)
+        root.option_add("*TCombobox*Listbox.selectBackground", ACC)
+        root.option_add("*TCombobox*Listbox.selectForeground", ON_ACC)
+        root.option_add("*TCombobox*Listbox.font", "{%s} 9" % UI)  # brace family: it has a space
+
+        # scrollbars - previously bare clam grey
+        for _sb in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+            style.configure(_sb, background=SB_THUMB, troughcolor=ALT, bordercolor=ALT,
+                            arrowcolor=MUTED, borderwidth=0, relief="flat")
+            style.map(_sb, background=[("pressed", ACC), ("active", SB_THUMB_H)],
+                      arrowcolor=[("pressed", ACC)])
+
+        # bottom status bar (its own slate band)
+        style.configure("Status.TFrame", background=ALT)
+        style.configure("Status.TLabel", background=ALT, foreground=MUTED, font=FS)
+        style.configure("StatusStrong.TLabel", background=ALT, foreground=INK, font=FS)
+        try:                                  # start maximized to use the whole screen
+            root.state("zoomed")
+        except tk.TclError:
+            try:
+                root.attributes("-zoomed", True)
+            except tk.TclError:
+                pass
 
         self.proc: subprocess.Popen | None = None
         self.q: queue.Queue = queue.Queue()
@@ -114,6 +254,8 @@ class App:
         self.chain: list[dict] = []
         self.t_start = 0.0
         self._open_line = False  # last log line is a '\r' progress line
+        self._mon_last = 0.0     # last system-monitor refresh
+        self._failed_key = None  # most recent step that exited non-zero (red marker)
 
         self._build_layout()
         self.refresh_statuses()
@@ -125,6 +267,23 @@ class App:
 
     # ------------------------------------------------------------- layout --
     def _build_layout(self) -> None:
+        # gradient header banner
+        self.header = tk.Canvas(self.root, height=60, highlightthickness=0, bd=0)
+        self.header.pack(fill="x", side="top")
+        self._htitle = self.header.create_text(
+            22, 30, anchor="w", text="Vehicle Detection  ·  Edge Optimization",
+            fill=HDR_TITLE, font=(UI, 16, "bold"))
+        self._hsub = self.header.create_text(
+            0, 30, anchor="e", text="YOLOv8n  ·  Raspberry Pi 5",
+            fill=HDR_SUB, font=(UI, 10))
+
+        def _paint_header(_=None):
+            _paint_gradient(self.header, HDR_FROM, HDR_TO)
+            self.header.coords(self._hsub, self.header.winfo_width() - 18, 30)
+            self.header.tag_raise(self._htitle)
+            self.header.tag_raise(self._hsub)
+        self.header.bind("<Configure>", _paint_header)
+
         main = ttk.Frame(self.root, padding=8)
         main.pack(fill="both", expand=True)
 
@@ -132,23 +291,30 @@ class App:
         left = ttk.Frame(main)
         left.pack(side="left", fill="y", padx=(0, 8))
 
-        ttk.Label(left, text="Pipeline", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(left, text="Pipeline", font=(UI, 11, "bold")).pack(anchor="w")
         self.step_marks: dict[str, tk.Label] = {}
         self.step_btns: dict[str, ttk.Button] = {}
         for step in STEPS:
             row = ttk.Frame(left)
             row.pack(fill="x", pady=1)
-            mark = tk.Label(row, text="O", width=2, font=("Segoe UI", 10, "bold"))
+            mark = tk.Label(row, text="○", width=2, bg=BG, fg=MUTED, font=(UI, 11, "bold"))
             mark.pack(side="left")
-            btn = ttk.Button(row, text=step["label"], width=30,
+            btn = ttk.Button(row, text=step["label"], width=30, style="Accent.TButton",
                              command=lambda s=step: self.run_step(s))
             btn.pack(side="left", fill="x", expand=True)
             self.step_marks[step["key"]] = mark
             self.step_btns[step["key"]] = btn
 
+        accrow = ttk.Frame(left)
+        accrow.pack(fill="x", pady=(2, 0))
+        self.var_bench_acc = tk.BooleanVar(value=not IS_EDGE)
+        _acc_txt = ("Measure accuracy (mAP) in benchmark  -  on-device, slower" if IS_EDGE
+                    else "Measure accuracy (mAP) in benchmark  -  slower")
+        ttk.Checkbutton(accrow, text=_acc_txt, variable=self.var_bench_acc).pack(side="left")
+
         bar = ttk.Frame(left)
         bar.pack(fill="x", pady=(8, 2))
-        self.btn_all = ttk.Button(bar, text="Run remaining steps", command=self.run_remaining)
+        self.btn_all = ttk.Button(bar, text="Run remaining steps", style="Accent.TButton", command=self.run_remaining)
         self.btn_all.pack(side="left", fill="x", expand=True)
         self.btn_stop = ttk.Button(bar, text="Stop", command=self.stop, state="disabled")
         self.btn_stop.pack(side="left", padx=(4, 0))
@@ -177,12 +343,12 @@ class App:
                                        postcommand=self._refresh_sources)
         self.cmb_source.grid(row=1, column=1, sticky="ew", pady=1)
         ttk.Label(det, text='pick a video, "0" = webcam, or type rtsp://...',
-                  foreground="#777").grid(row=2, column=0, columnspan=2, sticky="w")
+                  style="Hint.TLabel").grid(row=2, column=0, columnspan=2, sticky="w")
         self.var_display = tk.BooleanVar(value=True)
         ttk.Checkbutton(det, text="show video window (detection + benchmark)",
                         variable=self.var_display).grid(row=3, column=0, columnspan=2,
                                                         sticky="w")
-        self.btn_detect = ttk.Button(det, text="Run detection",
+        self.btn_detect = ttk.Button(det, text="Run detection", style="Accent.TButton",
                                      command=self.run_detection)
         self.btn_detect.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         det.columnconfigure(1, weight=1)
@@ -195,7 +361,7 @@ class App:
         if IS_EDGE:
             ttk.Label(left, text="Edge device (Raspberry Pi): training & optimization "
                       "run on the PC. This device does detection + benchmark.",
-                      foreground="#777", wraplength=240, justify="left").pack(fill="x", pady=(10, 4))
+                      style="Hint.TLabel", wraplength=240, justify="left").pack(fill="x", pady=(10, 4))
         else:
             build_nb.pack(fill="x", pady=(10, 4))
 
@@ -230,7 +396,7 @@ class App:
         self.btn_train = ttk.Button(tr, text="Train -> .pt + .onnx", command=self.train_model)
         self.btn_train.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         ttk.Label(tr, text="trains a .pt source (ONNX can't be trained). 0 epochs = export only.",
-                  foreground="#777", wraplength=240).grid(row=5, column=0, columnspan=2, sticky="w")
+                  style="Hint.TLabel", wraplength=240).grid(row=5, column=0, columnspan=2, sticky="w")
         tr.columnconfigure(1, weight=1)
 
         # --- Optimize tab: prune / quantize any model ---
@@ -253,14 +419,48 @@ class App:
             values=self._scan_pt(),
             postcommand=lambda: self.cmb_p_src.configure(values=self._scan_pt()))
         self.cmb_p_src.grid(row=2, column=1, sticky="ew", pady=1)
-        ttk.Label(comb, text="Prune %").grid(row=3, column=0, sticky="w")
-        self.var_p_pct = tk.StringVar(value="30")
-        ttk.Spinbox(comb, from_=1, to=90, textvariable=self.var_p_pct,
+        ttk.Label(comb, text="Total prune %").grid(row=3, column=0, sticky="w")
+        self.var_p_total = tk.StringVar(value="10")
+        ttk.Spinbox(comb, from_=1, to=90, textvariable=self.var_p_total,
                     width=8).grid(row=3, column=1, sticky="w", pady=1)
-        self.btn_prune = ttk.Button(comb, text="Prune this %",
+        ttk.Label(comb, text="Step size %").grid(row=4, column=0, sticky="w")
+        self.var_p_step = tk.StringVar(value="1")
+        ttk.Spinbox(comb, from_=1, to=90, textvariable=self.var_p_step,
+                    width=8).grid(row=4, column=1, sticky="w", pady=1)
+        ttk.Label(comb, text="Fine-tune epochs").grid(row=5, column=0, sticky="w")
+        self.var_p_epochs = tk.StringVar(value="1")
+        ttk.Spinbox(comb, from_=0, to=50, textvariable=self.var_p_epochs,
+                    width=8).grid(row=5, column=1, sticky="w", pady=1)
+        ttk.Label(comb, text="Output name").grid(row=6, column=0, sticky="w")
+        self.var_p_out = tk.StringVar()
+        ttk.Entry(comb, textvariable=self.var_p_out, width=22).grid(
+            row=6, column=1, sticky="ew", pady=1)
+        ttk.Label(comb, text="prune Step%, fine-tune, repeat until Total%",
+                  style="Hint.TLabel").grid(row=7, column=0, columnspan=2, sticky="w")
+        self.btn_prune = ttk.Button(comb, text="Prune (iterative)",
                                     command=self.combine_prune)
-        self.btn_prune.grid(row=4, column=0, columnspan=2, sticky="ew", pady=1)
+        self.btn_prune.grid(row=8, column=0, columnspan=2, sticky="ew", pady=1)
+        ttk.Separator(comb, orient="horizontal").grid(
+            row=9, column=0, columnspan=2, sticky="ew", pady=6)
+        ttk.Label(comb, text="Evaluate .pt/.onnx").grid(row=10, column=0, sticky="w")
+        self.var_e_src = tk.StringVar()
+        self.cmb_e_src = ttk.Combobox(
+            comb, textvariable=self.var_e_src, width=20, state="readonly",
+            values=self._scan_eval(),
+            postcommand=lambda: self.cmb_e_src.configure(values=self._scan_eval()))
+        self.cmb_e_src.grid(row=10, column=1, sticky="ew", pady=1)
+        self.btn_eval = ttk.Button(comb, text="Check accuracy (mAP)",
+                                   command=self.run_accuracy)
+        self.btn_eval.grid(row=11, column=0, columnspan=2, sticky="ew", pady=1)
+        ttk.Label(comb, text="real mAP / precision / recall vs labelled val set",
+                  style="Hint.TLabel").grid(row=12, column=0, columnspan=2, sticky="w")
         comb.columnconfigure(1, weight=1)
+        # Auto-suggest the pruned output name as {total}p{epochs}e_{source}; keep it in
+        # sync with the inputs until the user types a custom name into the box.
+        self._p_out_auto = ""
+        for _v in (self.var_p_total, self.var_p_epochs, self.var_p_src):
+            _v.trace_add("write", lambda *_: self._suggest_prune_name())
+        self._suggest_prune_name()
 
         # ---------- left: shortcuts ----------
         short = ttk.LabelFrame(left, text="Open", padding=6)
@@ -280,15 +480,20 @@ class App:
 
         log_tab = ttk.Frame(self.nb)
         self.nb.add(log_tab, text="  Log  ")
-        font = ("Consolas", 9) if IS_WINDOWS else ("DejaVu Sans Mono", 9)
-        self.txt = ScrolledText(log_tab, state="disabled", bg="#111418",
-                                fg="#d6d6d6", insertbackground="#d6d6d6",
-                                font=font, wrap="none")
+        font = (MONO, 10)
+        self.txt = ScrolledText(log_tab, state="disabled", bg=CON_BG, fg=CON_FG,
+                                insertbackground=CON_FG, selectbackground=CON_SEL,
+                                selectforeground="#ffffff", relief="flat", borderwidth=0,
+                                highlightthickness=1, highlightbackground=BORDER,
+                                padx=10, pady=8, font=font, wrap="none")
         self.txt.pack(fill="both", expand=True)
-        self.txt.tag_configure("hdr", foreground="#6cb6ff")
-        self.txt.tag_configure("ok", foreground="#7ce38b")
-        self.txt.tag_configure("err", foreground="#ff7b72")
-        self.txt.tag_configure("warn", foreground="#e3b341")
+        # ScrolledText embeds a classic tk.Scrollbar (not ttk) -> theme it directly
+        self.txt.vbar.configure(bg=SB_THUMB, troughcolor=CON_BG, activebackground=SB_THUMB_H,
+                                highlightthickness=0, bd=0, relief="flat", width=12)
+        self.txt.tag_configure("hdr", foreground=CON_HDR)
+        self.txt.tag_configure("ok", foreground=CON_OK)
+        self.txt.tag_configure("err", foreground=CON_ERR)
+        self.txt.tag_configure("warn", foreground=CON_WARN)
 
         res_tab = ttk.Frame(self.nb)
         self.nb.add(res_tab, text="  Results  ")
@@ -297,17 +502,23 @@ class App:
         ttk.Button(bar2, text="Refresh table", command=self.load_results).pack(side="left")
         ttk.Button(bar2, text="Open comparison chart",
                    command=self.show_chart).pack(side="left", padx=4)
+        ttk.Button(bar2, text="Export to Excel",
+                   command=self.export_excel).pack(side="left")
         self.tree = ttk.Treeview(res_tab, show="headings")
         self.tree.pack(fill="both", expand=True)
         self.load_results()
 
-        # ---------- bottom status bar ----------
-        status = ttk.Frame(self.root, padding=(8, 2))
-        status.pack(fill="x", side="bottom")
-        self.lbl_state = ttk.Label(status, text="idle")
+        # ---------- bottom status bar (own slate band + hairline divider above) ----------
+        status = ttk.Frame(self.root, style="Status.TFrame", padding=(10, 4))
+        status.pack(fill="x", side="bottom")        # bottom-most
+        tk.Frame(self.root, height=1, bg=BORDER).pack(fill="x", side="bottom")  # divider above it
+        self.lbl_state = ttk.Label(status, text="idle", style="StatusStrong.TLabel")
         self.lbl_state.pack(side="left")
-        self.lbl_elapsed = ttk.Label(status, text="")
+        self.lbl_elapsed = ttk.Label(status, text="", style="Status.TLabel")
         self.lbl_elapsed.pack(side="right")
+        # live whole-machine CPU/RAM, like Task Manager
+        self.lbl_mon = ttk.Label(status, text="", style="Status.TLabel")
+        self.lbl_mon.pack(side="right", padx=(0, 18))
 
     # ----------------------------------------------------- source dropdown --
     def _scan_sources(self) -> list[str]:
@@ -332,7 +543,8 @@ class App:
         """Every .onnx file currently in models/ (filenames)."""
         if not MODELS.exists():
             return []
-        return [p.name for p in sorted(MODELS.glob("*.onnx"))]
+        return [p.name for p in sorted(MODELS.glob("*.onnx"))
+                if not p.name.endswith(".prep.onnx")]
 
     def _refresh_models(self) -> None:
         self.cmb_variant.configure(values=self._scan_models())
@@ -342,6 +554,10 @@ class App:
         if not MODELS.exists():
             return []
         return [p.name for p in sorted(MODELS.glob("*.pt"))]
+
+    def _scan_eval(self) -> list[str]:
+        """Every model that can be accuracy-checked: .pt and .onnx in models/."""
+        return sorted(set(self._scan_models()) | set(self._scan_pt()))
 
     def _scan_train_sources(self) -> dict:
         """Trainable starting points -> their .pt path. ONNX is excluded because
@@ -410,6 +626,24 @@ class App:
                "--onnx", str(MODELS / src), "--prefix", prefix]
         self._launch({"key": "quant", "label": f"Quantize {src} -> {prefix}_static/_fp16"}, cmd)
 
+    def _suggest_prune_name(self) -> None:
+        """Suggest the pruned output name as {total}p{epochs}e_{source}; fill the
+        Output-name box with it until the user types their own name."""
+        raw = self.var_p_src.get().strip()
+        prev = Path(raw).stem if raw else ""
+        for suf in ("_fp32", "_fp16", "_static", "_dynamic"):
+            if prev.endswith(suf):
+                prev = prev[: -len(suf)]
+        try:
+            total = int(float(self.var_p_total.get()))
+            epochs = int(float(self.var_p_epochs.get()))
+        except (ValueError, TypeError):
+            return
+        suggested = f"{total}p{epochs}e_{prev or 'model'}"
+        if self.var_p_out.get().strip() in ("", self._p_out_auto):
+            self.var_p_out.set(suggested)        # still the auto value -> keep it fresh
+        self._p_out_auto = suggested
+
     def combine_prune(self) -> None:
         if not self._can_launch():
             return
@@ -417,19 +651,53 @@ class App:
         if not src:
             messagebox.showinfo("Pick a model", "Choose a .pt model to prune.")
             return
-        stem = Path(src).stem
-        out = "pruned" if stem == "simple" else f"{stem}_pruned"
         try:
-            pct = max(1, min(90, int(float(self.var_p_pct.get()))))
+            total = max(1, min(90, int(float(self.var_p_total.get()))))
+            step = max(1, min(total, int(float(self.var_p_step.get()))))
+            epochs = max(0, min(50, int(float(self.var_p_epochs.get()))))
         except ValueError:
-            messagebox.showwarning("Prune %", "Prune % must be a number (1-90).")
+            messagebox.showwarning("Prune settings",
+                                   "Total %, step % and epochs must be numbers.")
             return
-        amount = pct / 100.0
+        rounds = max(1, round(total / step))
+        out = self.var_p_out.get().strip() or f"{total}p{epochs}e_{Path(src).stem}"
+        out = Path(out).stem.replace(" ", "_") or f"{total}pruned"   # drop ext, filename-safe
         cmd = [str(VENV_PY), "-u", str(BASE / "02_pruned_model.py"),
-               "--weights", str(MODELS / src), "--out", out, "--amount", str(amount)]
-        self.log_line(f"Pruning {src} by {pct}% then fine-tuning to recover "
+               "--weights", str(MODELS / src), "--out", out,
+               "--amount", str(total / 100.0), "--step", str(step / 100.0),
+               "--epochs", str(epochs)]
+        self.log_line(f"Iterative prune {src}: {total}% total in {rounds} round(s) of "
+                      f"~{step}% each, {epochs} fine-tune epoch(s) per round "
                       "(this trains - be patient).", "warn")
-        self._launch({"key": "prune", "label": f"Prune {src} {pct}% -> {out}"}, cmd)
+        self._launch({"key": "prune",
+                      "label": f"Prune {src} {total}%/{step}% x{rounds} -> {out}"}, cmd)
+
+    def run_accuracy(self) -> None:
+        if not self._can_launch():
+            return
+        src = self.var_e_src.get().strip()
+        if not src:
+            messagebox.showinfo("Pick a model", "Choose a .pt or .onnx model to evaluate.")
+            return
+        cmd = [str(VENV_PY), "-u", str(BASE / "evaluate.py"), "--model", str(MODELS / src)]
+        self.log_line(f"Checking accuracy of {src} on the labelled val set "
+                      "(mAP / precision / recall - runs validation, takes a moment).", "warn")
+        self._launch({"key": "eval", "label": f"Accuracy: {src}"}, cmd)
+
+    def export_excel(self) -> None:
+        """Build results/results.xlsx from the result CSVs. Runs export_results.py with
+        the VENV python (which has openpyxl) as a subprocess, so it works no matter what
+        interpreter launched the GUI; the file opens automatically when it finishes."""
+        if not self._can_launch():
+            return
+        if not (RESULTS / "benchmark.csv").exists():
+            messagebox.showinfo(
+                "No results yet",
+                "Run a benchmark first - results/benchmark.csv does not exist.")
+            return
+        cmd = [str(VENV_PY), "-u", str(BASE / "export_results.py")]
+        self.log_line("Exporting results to results/results.xlsx ...", "warn")
+        self._launch({"key": "xlsx", "label": "Export to Excel"}, cmd)
 
     def _can_launch(self) -> bool:
         if self.proc is not None:
@@ -475,12 +743,17 @@ class App:
             return
         py = sys.executable if step.get("system_python") else str(VENV_PY)
         cmd = [py, "-u", str(BASE / step["script"])] + list(step.get("extra", []))
-        # Benchmark shows each model on video only when "show video window" is ticked;
-        # unticked => it still measures size/accuracy/CPU/RAM but opens no windows.
-        if step.get("key") == "bench" and self.var_display.get():
-            cmd.append("--show")
-            self.log_line("Each model shows in a video window for a few seconds, "
-                          "one after another.", "warn")
+        # Benchmark options from the pipeline column:
+        #   - show each model on video only when "show video window" is ticked
+        #   - cap the FPS at the chosen rate, or run uncapped when "Limit FPS" is off
+        if step.get("key") == "bench":
+            if self.var_display.get():
+                cmd.append("--show")
+                self.log_line("Each model shows in a video window for a few seconds, "
+                              "one after another.", "warn")
+            if self.var_bench_acc.get():
+                cmd.append("--map")
+                self.log_line("Measuring mAP accuracy per model (validation pass - slower).", "warn")
         self._launch(step, cmd)
 
     def run_detection(self) -> None:
@@ -581,6 +854,12 @@ class App:
             label = self.current["label"] if self.current else "?"
             self.lbl_state.configure(text=f"running: {label}")
             self.lbl_elapsed.configure(text=f"elapsed {mins:02d}:{secs:02d}")
+        if psutil is not None and time.time() - self._mon_last >= 1.0:
+            self._mon_last = time.time()
+            vm = psutil.virtual_memory()
+            self.lbl_mon.configure(
+                text=f"CPU {psutil.cpu_percent(None):.0f}%    "
+                     f"RAM {vm.used / 1e9:.1f}/{vm.total / 1e9:.1f} GB ({vm.percent:.0f}%)")
         self.root.after(80, self._poll)
 
     def _finished(self, rc: int) -> None:
@@ -590,9 +869,13 @@ class App:
             self._log_insert("", newline=True)
         if rc == 0:
             self.log_line(f"<< done: {step['label'] if step else '?'}", "ok")
+            if step and step.get("key") == self._failed_key:
+                self._failed_key = None          # cleared the earlier failure
         else:
             self.log_line(f"<< FAILED (exit {rc}): {step['label'] if step else '?'} "
                           "- scroll up for the error", "err")
+            if step:
+                self._failed_key = step.get("key")
             self.chain = []
         self._set_running_ui(False)
         self.refresh_statuses()
@@ -600,6 +883,8 @@ class App:
         if step and step.get("key") == "bench" and rc == 0:
             self.load_results()
             self.nb.select(1)
+        if step and step.get("key") == "xlsx" and rc == 0:
+            open_path(RESULTS / "results.xlsx")
         if self.chain and rc == 0:
             nxt = self.chain.pop(0)
             self.run_step(nxt)
@@ -629,17 +914,20 @@ class App:
         self.btn_train.configure(state=state)
         self.btn_quant.configure(state=state)
         self.btn_prune.configure(state=state)
+        self.btn_eval.configure(state=state)
         self.btn_stop.configure(state="normal" if running else "disabled")
 
     def refresh_statuses(self) -> None:
         for step in STEPS:
             mark = self.step_marks[step["key"]]
             if self.current is not None and self.current.get("key") == step["key"]:
-                mark.configure(text=">", fg="#b58900")
+                mark.configure(text="▶", fg=WARN)
+            elif step["key"] == self._failed_key:
+                mark.configure(text="✕", fg=ERROR)
             elif step["done"]():
-                mark.configure(text="V", fg="#1a7f37")
+                mark.configure(text="✓", fg=SUCCESS)
             else:
-                mark.configure(text="O", fg="#999999")
+                mark.configure(text="○", fg=MUTED)
 
     # ------------------------------------------------------------ results --
     def load_results(self) -> None:
@@ -679,9 +967,9 @@ class App:
         except Exception:
             open_path(png)                         # ancient Tk: fall back to the OS viewer
             return
-        # Integer-subsample a large chart down so it fits the screen (no Pillow needed).
-        tw = int(self.root.winfo_screenwidth() * 0.9)
-        th = int(self.root.winfo_screenheight() * 0.8)
+        # Integer-subsample a large chart down so it fills (almost) the whole screen.
+        tw = int(self.root.winfo_screenwidth() * 0.98)
+        th = int(self.root.winfo_screenheight() * 0.92)
         factor = 1
         while factor < 12 and (img.width() // factor > tw or img.height() // factor > th):
             factor += 1
@@ -689,9 +977,17 @@ class App:
             img = img.subsample(factor)
 
         win = tk.Toplevel(self.root)
+        win.configure(bg=BG)
         win.title("Model comparison chart  (results/comparison.png)")
+        try:                                  # open the chart maximized / full screen
+            win.state("zoomed")
+        except tk.TclError:
+            try:
+                win.attributes("-zoomed", True)
+            except tk.TclError:
+                win.geometry(f"{tw}x{th}+0+0")
         cv = tk.Canvas(win, width=min(img.width(), tw), height=min(img.height(), th),
-                       background="#202020", highlightthickness=0)
+                       background=ALT, highlightthickness=0)
         hbar = ttk.Scrollbar(win, orient="horizontal", command=cv.xview)
         vbar = ttk.Scrollbar(win, orient="vertical", command=cv.yview)
         cv.configure(xscrollcommand=hbar.set, yscrollcommand=vbar.set)

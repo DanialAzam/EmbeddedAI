@@ -7,6 +7,10 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 set "PYEXE="
+REM Prefer the project venv (has cv2/openpyxl/psutil), like gui.sh does on Linux.
+if exist "%~dp0.venv\Scripts\python.exe" set PYEXE="%~dp0.venv\Scripts\python.exe"
+if defined PYEXE goto :run
+
 py -3 -c "import sys" >nul 2>nul && set "PYEXE=py -3"
 if defined PYEXE goto :run
 

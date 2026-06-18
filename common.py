@@ -56,6 +56,41 @@ def image_to_blob(img_bgr: np.ndarray, size: int) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# Display helper
+# ---------------------------------------------------------------------------
+
+def fit_window_to_screen(win_name: str) -> bool:
+    """Create an OpenCV window that fills the screen (aspect preserved) and is
+    aligned to the top-left corner, without overflowing it. Best-effort:
+      - returns False on a headless OpenCV build (no HighGUI / cv2.imshow),
+      - falls back to OS fullscreen when the screen size can't be queried.
+    Call once before the display loop; later cv2.imshow() reuses this window."""
+    try:
+        cv2.namedWindow(win_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+    except cv2.error:
+        return False  # headless build - no window system
+    sw = sh = 0
+    try:
+        import tkinter as _tk
+        _r = _tk.Tk()
+        _r.withdraw()
+        sw, sh = _r.winfo_screenwidth(), _r.winfo_screenheight()
+        _r.destroy()
+    except Exception:  # noqa: BLE001 - tkinter missing / no display
+        pass
+    try:
+        if sw > 0 and sh > 0:
+            # leave a small margin for the title bar / taskbar so it stays on-screen
+            cv2.resizeWindow(win_name, int(sw), max(240, int(sh) - 72))
+            cv2.moveWindow(win_name, 0, 0)
+        else:
+            cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    except cv2.error:
+        pass
+    return True
+
+
+# ---------------------------------------------------------------------------
 # ONNX benchmarking
 # ---------------------------------------------------------------------------
 

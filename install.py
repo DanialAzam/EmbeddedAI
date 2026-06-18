@@ -98,9 +98,18 @@ def install_packages(edge: bool) -> None:
     run([vp, "-m", "pip", "install", "--upgrade", "pip"], "pip upgrade")
     if edge and IS_PI:
         # OpenCV is provided by the system (python3-opencv) for a working GUI window;
-        # pip's ARM opencv-python is headless. Install everything else here.
-        pkgs = ["onnxruntime", "numpy<2", "pyyaml", "psutil", "matplotlib"]
-        print("[4/5] Installing inference deps "
+        # pip's ARM opencv-python is headless. Install everything ELSE from
+        # requirements_edge.txt (minus the opencv line) so this list never drifts
+        # out of sync with the requirements file (e.g. openpyxl, psutil, matplotlib).
+        reqs = BASE / "requirements_edge.txt"
+        if not reqs.exists():
+            fail(f"{reqs.name} not found next to install.py")
+        pkgs = []
+        for line in reqs.read_text(encoding="utf-8").splitlines():
+            spec = line.split("#", 1)[0].strip()            # drop comments
+            if spec and "opencv" not in spec.lower():        # opencv = system package
+                pkgs.append(spec)
+        print("[4/5] Installing inference deps from requirements_edge.txt "
               "(OpenCV comes from system python3-opencv) ...")
         run([vp, "-m", "pip", "install", *pkgs], "library install")
         return
@@ -115,7 +124,7 @@ def install_packages(edge: bool) -> None:
 def verify(edge: bool) -> None:
     print("[5/5] Verifying imports ...")
     if edge and IS_PI:
-        code = ("import onnxruntime, numpy, yaml, psutil, matplotlib, cv2; "
+        code = ("import onnxruntime, numpy, yaml, psutil, matplotlib, openpyxl, cv2; "
                 "print('  OK  opencv', cv2.__version__, '(system)', "
                 "'| onnxruntime', onnxruntime.__version__)")
         result = subprocess.run([str(venv_python()), "-c", code])
@@ -124,7 +133,7 @@ def verify(edge: bool) -> None:
                  "GUI build, then re-run this installer:\n"
                  "    sudo apt install -y python3-opencv")
         return
-    mods = "cv2, onnxruntime, numpy, yaml" + ("" if edge else ", torch, ultralytics")
+    mods = "cv2, onnxruntime, numpy, yaml, openpyxl" + ("" if edge else ", torch, ultralytics")
     code = (f"import {mods}; import onnxruntime, cv2; "
             f"print('  OK  opencv', cv2.__version__, '| onnxruntime', onnxruntime.__version__)")
     run([venv_python(), "-c", code], "import verification")

@@ -1,0 +1,17 @@
+model,size_mb,latency_ms,max_fps,veh_per_frame,cpu_pct,ram_mb,mAP50_95,device
+01_trained_fp32.onnx,12.72,36.9,27.1,8.13,91.4,386.0,,Raspberry Pi 5
+02_int8_fp32head.onnx,6.16,24.5,40.8,8.25,87.3,377.0,,Raspberry Pi 5
+03_trained_fp16.onnx,6.4,52.7,19.0,8.13,89.3,383.0,,Raspberry Pi 5
+04_trained_int8_fp16head.onnx,4.45,19.9,50.4,8.28,82.2,379.0,,Raspberry Pi 5
+05_10_Pruned_fp32.onnx,10.72,31.8,31.5,8.08,90.9,385.0,,Raspberry Pi 5
+06_10_Pruned_int8_fp32.onnx,5.48,22.8,43.8,7.94,84.5,377.0,,Raspberry Pi 5
+07_10_Pruned_fp16.onnx,5.4,25.2,39.6,8.0,89.4,384.0,,Raspberry Pi 5
+08_10_Pruned_int8_fp16head.onnx,3.9,19.0,52.6,7.91,83.4,379.0,,Raspberry Pi 5
+09_20_Pruned_fp32.onnx,9.08,28.2,35.5,7.86,91.7,383.0,,Raspberry Pi 5
+10_20_Pruned_int8_fp32.onnx,4.91,21.2,47.2,7.32,89.1,377.0,,Raspberry Pi 5
+11_20_Pruned_fp16.onnx,4.58,22.3,44.9,7.84,90.6,381.0,,Raspberry Pi 5
+12_20_Pruned_int8_fp16head.onnx,3.43,17.6,56.8,7.46,90.5,379.0,,Raspberry Pi 5
+13_30_Pruned_fp32.onnx,7.68,39.3,25.4,7.54,86.4,381.0,,Raspberry Pi 5
+14_30_Pruned_int8_fp32.onnx,4.41,28.3,35.4,7.61,89.3,376.0,,Raspberry Pi 5
+15_30_Pruned_fp16.onnx,3.88,18.8,53.2,7.56,83.4,378.0,,Raspberry Pi 5
+16_30_Pruned_int8_fp16head.onnx,3.03,15.8,63.1,7.83,88.2,381.0,,Raspberry Pi 5

@@ -1,0 +1,2 @@
+model,mAP50,mAP50_95,precision,recall
+0trained_fp16.onnx,0.1482,0.0702,0.2623,0.1913

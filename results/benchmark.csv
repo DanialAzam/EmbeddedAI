@@ -1,0 +1,18 @@
+model,size_mb,latency_ms,max_fps,veh_per_frame,cpu_pct,ram_mb,mAP50_95,device
+01_trained_fp32.onnx,12.72,13.6,73.3,8.99,39.2,205.0,0.0705,Laptop CPU
+02_trained_fp16.onnx,6.4,11.5,87.2,9.03,39.9,209.0,0.0703,Laptop CPU
+03_trained_static.onnx,6.16,11.4,88.1,9.06,39.3,197.0,0.0677,Laptop CPU
+04_10pruned_fp32.onnx,10.72,14.1,71.0,5.83,41.8,207.0,0.045,Laptop CPU
+05_10pruned_fp16.onnx,5.4,13.2,75.6,5.81,42.4,208.0,0.0454,Laptop CPU
+06_10pruned_static.onnx,5.48,10.8,92.3,5.78,40.9,196.0,0.0444,Laptop CPU
+07_20pruned_fp32.onnx,9.08,13.5,73.8,7.09,42.8,201.0,0.0437,Laptop CPU
+08_20pruned_fp16.onnx,4.58,12.1,82.4,7.07,43.3,205.0,0.0437,Laptop CPU
+09_20pruned_static.onnx,4.91,11.1,89.8,7.34,42.4,198.0,0.0414,Laptop CPU
+10_30pruned_fp32.onnx,7.68,10.7,93.7,8.12,42.0,201.0,0.0409,Laptop CPU
+10p10e_0trained.onnx,10.72,13.9,72.0,8.53,43.2,208.0,0.0621,Laptop CPU
+10p3e_0trained.onnx,10.72,13.7,72.9,8.33,40.0,208.0,0.0536,Laptop CPU
+10p6e_0trained.onnx,10.72,14.0,71.6,9.19,44.7,208.0,0.0607,Laptop CPU
+10p6e_0trained_fp16.onnx,5.4,13.8,72.5,9.23,44.2,212.0,0.0609,Laptop CPU
+10p6e_0trained_static.onnx,5.48,11.1,89.8,8.86,43.1,199.0,0.0568,Laptop CPU
+11_30pruned_fp16.onnx,3.88,11.0,91.0,8.09,43.1,204.0,0.041,Laptop CPU
+12_30pruned_static.onnx,4.41,10.3,97.6,7.71,41.4,198.0,0.0383,Laptop CPU
